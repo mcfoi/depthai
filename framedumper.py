@@ -4,24 +4,28 @@ from time import perf_counter_ns
 import time
 import depthai as dai
 import cv2
+import numpy as np
 
-globalFPS = 5.0
+globalFPS = 2.0 # float(1.0/10.0)
 monoCameraResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P
 colorCameraResolution = dai.ColorCameraProperties.SensorResolution.THE_800_P
 
 
-def captureStillRGB(rgbControlQueue):
+def captureStillRGB(colorCameraControl_In):
     ctrl = dai.CameraControl()
     ctrl.setCaptureStill(True)
-    rgbControlQueue.send(ctrl)
+    colorCameraControl_In.send(ctrl)
     print("Sent 'still' event to the camera!")
 
 
-# Make sure the destination path is present before starting to store the examples
+# Make sure the destination path is present before starting to store the frames
 dirName = "output"
 Path(dirName).mkdir(parents=True, exist_ok=True)
 
 pipeline = dai.Pipeline()
+
+# #############################
+# DEPTH
 
 # Create MonoCamera nodes
 monoRight = pipeline.create(dai.node.MonoCamera)
@@ -40,6 +44,7 @@ monoLeft.setFps(globalFPS)
 
 # Create StereoDepth node
 stereoDepth = pipeline.create(dai.node.StereoDepth)
+stereoDepth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
 
 # https://docs.luxonis.com/projects/api/en/latest/components/nodes/stereo_depth/#currently-configurable-blocks
 
@@ -47,35 +52,31 @@ stereoDepth = pipeline.create(dai.node.StereoDepth)
 # To prioritize accuracy, sets Confidence threshold to 200 .. ..or use: stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
 threshold = 200 # Can range between 0:max confidence - 255:min confidence
 stereoDepth.initialConfig.setConfidenceThreshold(threshold)
-# 
 #stereoDepth.initialConfig.setDisparityShift(25) # This will reduce MazZ to ~140 cm
 # LeftRightCheck(True) = Better handling for occlusions but has a performance cost
 stereoDepth.setLeftRightCheck(True)
 # ExtendedDisparity(True) = Closer-in minimum depth, disparity range is doubled:
 stereoDepth.setExtendedDisparity(True)
 # Subpixel(True) = Better accuracy for longer distance, fractional disparity 32-levels:
-stereoDepth.setSubpixel(True)
+stereoDepth.setSubpixel(False)
 
-stereoDepth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
 stereoDepth.setRectifyEdgeFillColor(0)  # Black, to better see the cutout from rectification (black stripe on the edges)
 
 # Link MonoCameras to StereoCamera node without creating explicitly a XLinkOut for each of the mono cameras
 monoRight.out.link(stereoDepth.right)
 monoLeft.out.link(stereoDepth.left)
 
-# Create a XLinkOut and link it to StereoCamera output
-stereoXlinkOut_Depth = pipeline.createXLinkOut()
-stereoXlinkOut_Depth.setStreamName("stereoXlinkOut_Depth")
-stereoDepth.depth.link(stereoXlinkOut_Depth.input)
+# Create a XLinkOut and link it to StereoCamera output, both for DEPTH and DISPARITY
+stereoDepth_Out_Depth = pipeline.createXLinkOut()
+stereoDepth_Out_Depth.setStreamName("stereoDepth_Out_Depth")
+stereoDepth.depth.link(stereoDepth_Out_Depth.input)
+stereoDepth_Out_Disparity = pipeline.createXLinkOut()
+stereoDepth_Out_Disparity.setStreamName("stereoDepth_Out_Disparity")
+stereoDepth.disparity.link(stereoDepth_Out_Disparity.input)
 
-# Create encoder node for frame encoding
-videoEncoder = pipeline.create(dai.node.VideoEncoder)
-videoEncoder.setDefaultProfilePreset(1, dai.VideoEncoderProperties.Profile.MJPEG)
-stereoDepth.depth.link(videoEncoder.input)
 
-videoEncoderXlinkOut = pipeline.createXLinkOut()
-videoEncoderXlinkOut.setStreamName("videoEncoderXlinkOut")
-videoEncoder.bitstream.link(videoEncoderXlinkOut.input)
+# #############################
+# COLOR
 
 # Create ColorCamera node
 colorCamera = pipeline.create(dai.node.ColorCamera)
@@ -84,18 +85,18 @@ colorCamera.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
 colorCamera.setFps(globalFPS)
 
 # Create CameraColor Control Node
-colorCameraControlXlinkOut = pipeline.create(dai.node.XLinkIn)
-colorCameraControlXlinkOut.setStreamName("colorCameraControlXlinkOut")
-colorCameraControlXlinkOut.out.link(colorCamera.inputControl)
+colorCameraControl_In = pipeline.create(dai.node.XLinkIn)
+colorCameraControl_In.setStreamName("colorCameraControl_In")
+colorCameraControl_In.out.link(colorCamera.inputControl)
 
 # Create encoder node for RGB frame encoding
-videoEncoderRGB = pipeline.create(dai.node.VideoEncoder)
-videoEncoderRGB.setDefaultProfilePreset(1, dai.VideoEncoderProperties.Profile.MJPEG)
-colorCamera.still.link(videoEncoderRGB.input)
+colorCameraEncoder = pipeline.create(dai.node.VideoEncoder)
+colorCameraEncoder.setDefaultProfilePreset(1, dai.VideoEncoderProperties.Profile.MJPEG)
+colorCamera.still.link(colorCameraEncoder.input)
 
-videoEncoderRGBXlinkOut = pipeline.createXLinkOut()
-videoEncoderRGBXlinkOut.setStreamName("videoEncoderRGBXlinkOut")
-videoEncoderRGB.bitstream.link(videoEncoderRGBXlinkOut.input)
+colorCameraEncoder_Out = pipeline.createXLinkOut()
+colorCameraEncoder_Out.setStreamName("colorCameraEncoder_Out")
+colorCameraEncoder.bitstream.link(colorCameraEncoder_Out.input)
 
 '''
 # Create explicit 'XLinkOut' for each Mono camera node and attach it
@@ -136,17 +137,27 @@ with dai.Device(pipeline) as device:
     print('USB speed:', device.getUsbSpeed())
     print('Connected cameras:', device.getConnectedCameras())
     
-    depthQueue = device.getOutputQueue(name="stereoXlinkOut_Depth", maxSize=100, blocking=False)
-    rgbStillQueue = device.getOutputQueue(name="videoEncoderRGBXlinkOut", maxSize=30, blocking=True)
-    rgbControlQueue = device.getInputQueue(name="colorCameraControlXlinkOut")
+    _colorCameraControl_In = device.getInputQueue(name="colorCameraControl_In")
+    _stereoDepth_Out_Depth = device.getOutputQueue(name="stereoDepth_Out_Depth", maxSize=100, blocking=False)
+    _stereoDepth_Out_Disparity = device.getOutputQueue(name="stereoDepth_Out_Disparity", maxSize=1, blocking=True)
+    _colorCameraEncoder_Out = device.getOutputQueue(name="colorCameraEncoder_Out", maxSize=30, blocking=True)
     
     i=1
     while (True):
         start = time.time()
-        depthFrame = depthQueue.tryGet()
-        if depthFrame is not None:
+        depth = _stereoDepth_Out_Depth.tryGet()
+        if depth is not None:
             # This code will run at 5 FPS
-            depthCVimage = depthFrame.getCvFrame()
+            depthCVimage = depth.getCvFrame()
+            disparity = _stereoDepth_Out_Disparity.get() # blocking call, will wait until a new data has arrived
+            disparityFrame = disparity.getFrame()
+            # Normalization for better visualization
+            maxDisparity = stereoDepth.initialConfig.getMaxDisparity()
+            disparityFrameScaled = (disparityFrame * (255 / maxDisparity)).astype(np.uint8)
+            # cv2.imshow("disparity", disparityFrameScaled)
+            # Available color maps: https://docs.opencv.org/3.4/d3/d50/group__imgproc__colormap.html
+            disparityFrameScaledColored = cv2.applyColorMap(disparityFrameScaled, cv2.COLORMAP_JET)
+            cv2.imshow("disparity_color", disparityFrameScaledColored)
             
             stop = time.time()
             elapsed = stop - start
@@ -155,13 +166,13 @@ with dai.Device(pipeline) as device:
             i+=1
             
             # Save RGB still frame
-            if rgbStillQueue.has():
+            if _colorCameraEncoder_Out.has():
                 fName = f"{dirName}/{int(time.time() * 1000)}.jpeg"
                 with open(fName, "wb") as f:
-                    f.write(rgbStillQueue.get().getData())
+                    f.write(_colorCameraEncoder_Out.get().getData())
                     print('Image saved to', fName)
             else:
-                captureStillRGB(rgbControlQueue)
+                captureStillRGB(_colorCameraControl_In)
     # cv2.imshow("Depth", depthCVimage)
 
 
