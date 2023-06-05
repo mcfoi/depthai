@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 from time import sleep
 from time import perf_counter_ns
@@ -6,7 +7,7 @@ import depthai as dai
 import cv2
 import numpy as np
 
-globalFPS = 2.0 # float(1.0/10.0)
+globalFPS = 10.0 # float(1.0/10.0)
 monoCameraResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P
 colorCameraResolution = dai.ColorCameraProperties.SensorResolution.THE_800_P
 
@@ -67,12 +68,12 @@ monoRight.out.link(stereoDepth.right)
 monoLeft.out.link(stereoDepth.left)
 
 # Create a XLinkOut and link it to StereoCamera output, both for DEPTH and DISPARITY
-stereoDepth_Out_Depth = pipeline.createXLinkOut()
-stereoDepth_Out_Depth.setStreamName("stereoDepth_Out_Depth")
-stereoDepth.depth.link(stereoDepth_Out_Depth.input)
-stereoDepth_Out_Disparity = pipeline.createXLinkOut()
-stereoDepth_Out_Disparity.setStreamName("stereoDepth_Out_Disparity")
-stereoDepth.disparity.link(stereoDepth_Out_Disparity.input)
+stereoDepth_Depth_Out = pipeline.createXLinkOut()
+stereoDepth_Depth_Out.setStreamName("stereoDepth_Depth_Out")
+stereoDepth.depth.link(stereoDepth_Depth_Out.input)
+stereoDepth_Disparity_Out = pipeline.createXLinkOut()
+stereoDepth_Disparity_Out.setStreamName("stereoDepth_Disparity_Out")
+stereoDepth.disparity.link(stereoDepth_Disparity_Out.input)
 
 
 # #############################
@@ -137,44 +138,90 @@ with dai.Device(pipeline) as device:
     print('USB speed:', device.getUsbSpeed())
     print('Connected cameras:', device.getConnectedCameras())
     
-    _colorCameraControl_In = device.getInputQueue(name="colorCameraControl_In")
-    _stereoDepth_Out_Depth = device.getOutputQueue(name="stereoDepth_Out_Depth", maxSize=100, blocking=False)
-    _stereoDepth_Out_Disparity = device.getOutputQueue(name="stereoDepth_Out_Disparity", maxSize=1, blocking=True)
-    _colorCameraEncoder_Out = device.getOutputQueue(name="colorCameraEncoder_Out", maxSize=30, blocking=True)
+    colorCameraControl_InQueue: dai.DataInputQueue = device.getInputQueue(name="colorCameraControl_In")
+    stereoDepth_Depth_OutQueue: dai.DataOutputQueue = device.getOutputQueue(name="stereoDepth_Depth_Out", maxSize=1, blocking=False)
+    stereoDepth_Disparity_OutQueue: dai.DataOutputQueue = device.getOutputQueue(name="stereoDepth_Disparity_Out", maxSize=1, blocking=True)
+    colorCameraEncoder_OutQueue: dai.DataOutputQueue = device.getOutputQueue(name="colorCameraEncoder_Out", maxSize=1, blocking=True)
+    
+    # cv2.namedWindow("Preview")
     
     i=1
     while (True):
         start = time.time()
-        depth = _stereoDepth_Out_Depth.tryGet()
-        if depth is not None:
-            # This code will run at 5 FPS
-            depthCVimage = depth.getCvFrame()
-            disparity = _stereoDepth_Out_Disparity.get() # blocking call, will wait until a new data has arrived
-            disparityFrame = disparity.getFrame()
-            # Normalization for better visualization
+        depthImg: dai.ImgFrame = stereoDepth_Depth_OutQueue.tryGet()
+        if depthImg is not None:
+            # This code will run at 5 FPS            
+            osTimes = int(time.time_ns() / 1_000_000) # Milliseconds
+            disparityImg: dai.ImgFrame = stereoDepth_Disparity_OutQueue.get() # blocking call, will wait until a new data has arrived
+            # Extracted just to test if they are synchronized: (they are!)
+            # depthImgTimedelta:timedelta = depthImg.getTimestampDevice()
+            # disparityImgTimedelta:timedelta = disparityImg.getTimestampDevice()
+            
+            # DEPTH
+            # Get the uint16 array
+            depthCVimage = depthImg.getCvFrame() # A CVImage is actually just an array of row-arrays, each row being a single array of column-values.
+            fName = f"{dirName}/{osTimes}_depth_gray.tiff"
+            cv2.imwrite(fName, depthCVimage)
+            # Depth as numpy.ndarray
+            # maxDepth = np.max(depthCVimage)
+            # maxFigures = len(str(maxDepth))
+            # fName = f"{dirName}/{osTimes}_depth_array.gz"
+            # np.savetxt(fName, depthCVimage, delimiter=',', fmt=f'%{maxFigures}.0u')
+            # Unique depth values
+            # fName = f"{dirName}/{osTimes}_depth_unique_values.txt"
+            # unique_depth_values_mm = np.unique(depthCVimage, return_counts=True)
+            # unique_depth_values_mm = np.transpose(unique_depth_values_mm)
+            # np.savetxt(fName, unique_depth_values_mm, delimiter=',', fmt=f'%{maxFigures}.0u')
+            
+            # maxDepth = np.max(depthCVimage[depthCVimage != np.max(depthCVimage)])
+            maxDepth = np.max(depthCVimage)
+            minDepth = np.min(depthCVimage[np.nonzero(depthCVimage)])
+            print(f"{osTimes} => Max DEPTH : {maxDepth/10:.0f}cm | Min DEPTH : {minDepth/10:.0f}cm")
+            depthyCvImageScaled = (depthCVimage * (255 / maxDepth)).astype(np.uint8)
+            fName = f"{dirName}/{osTimes}_depth_scaled_gray.png"
+            #cv2.imwrite(fName, depthyCvImageScaled)
+            
+            # DISPARITY
+            disparityCvImage = disparityImg.getCvFrame() # A Frame is an 'object' with data in uint8
+            fName = f"{dirName}/{osTimes}_disparity_gray.jpg"
+            #cv2.imwrite(fName, disparityCvImage)
+            disparityFrame = disparityImg.getFrame() # A Frame is actually just an 'numpy.ndarray'
+            # Normalize for better visualization
             maxDisparity = stereoDepth.initialConfig.getMaxDisparity()
-            disparityFrameScaled = (disparityFrame * (255 / maxDisparity)).astype(np.uint8)
-            # cv2.imshow("disparity", disparityFrameScaled)
+            disparityCvImageScaled = (disparityCvImage * (255 / maxDisparity)).astype(np.uint8)
+            fName = f"{dirName}/{osTimes}_disparity_scaled_gray.jpg"
+            #cv2.imwrite(fName, disparityCvImageScaled)
             # Available color maps: https://docs.opencv.org/3.4/d3/d50/group__imgproc__colormap.html
-            disparityFrameScaledColored = cv2.applyColorMap(disparityFrameScaled, cv2.COLORMAP_JET)
-            cv2.imshow("disparity_color", disparityFrameScaledColored)
+            disparityCvImageScaledColored = cv2.applyColorMap(disparityCvImageScaled, cv2.COLORMAP_JET)
+            fName = f"{dirName}/{osTimes}_disparity_scaled_colored.jpg"
+            cv2.imwrite(fName, disparityCvImageScaledColored)
+            try:
+                if (disparityCvImageScaledColored is not None):
+                    # cv2.imshow("Preview", disparityCvImageScaledColored)
+                    pass
+            except Exception as e:
+                cv2.destroyAllWindows()
             
             stop = time.time()
             elapsed = stop - start
             if elapsed > 0:
-                print(f"{i} Dequeued DEPTH frame: {(1_000_000_000/elapsed):.1f} FPS")
+                #print(f"{i} Dequeued DEPTH frame: {(1_000_000_000/elapsed):.1f} FPS")
+                pass
             i+=1
             
             # Save RGB still frame
-            if _colorCameraEncoder_Out.has():
+            if colorCameraEncoder_OutQueue.has():
                 fName = f"{dirName}/{int(time.time() * 1000)}.jpeg"
+                '''
                 with open(fName, "wb") as f:
-                    f.write(_colorCameraEncoder_Out.get().getData())
+                    f.write(colorCameraEncoder_OutQueue.get().getData())
                     print('Image saved to', fName)
+                '''
             else:
-                captureStillRGB(_colorCameraControl_In)
+                #captureStillRGB(colorCameraControl_InQueue)
+                pass
+    
     # cv2.imshow("Depth", depthCVimage)
-
 
 '''
 configInNode = pipeline.create(dai.node.XLinkIn)
