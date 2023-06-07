@@ -67,3 +67,6 @@ recordings/
 
 # PyPi token
 .pypirc
+
+# Data
+/output/*

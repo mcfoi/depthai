@@ -1,5 +1,6 @@
 from datetime import timedelta
 from pathlib import Path
+from threading import Thread
 from time import sleep
 from time import perf_counter_ns
 import time
@@ -9,19 +10,24 @@ import numpy as np
 
 # #################################
 globalFPS = 5.0 # float(1.0/10.0)
-monoCameraResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P
+monoCameraResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P # MXA is THE_800_P for MonoCamera
 colorCameraResolution = dai.ColorCameraProperties.SensorResolution.THE_800_P
 width:int = 1280
 height:int = 800
+autoExposureSetsAfterFrameCount = 40
 # #################################
 
+captureColorStill = dai.CameraControl().setCaptureStill(True)
 
 def request_StillImage_to_ColorCamera(colorCameraControl_In: dai.DataInputQueue):
-    ctrl = dai.CameraControl()
-    ctrl.setCaptureStill(True)
-    colorCameraControl_In.send(ctrl)
-    print("Sent 'still' event to the camera!")
+    colorCameraControl_In.send(captureColorStill)
+    # print("Sent 'still' event to the camera!")
 
+def shouldSave(frameCounter: int):
+    return frameCounter > autoExposureSetsAfterFrameCount
+
+def cvSaveFile(fName: str, cvImage: object):
+    cv2.imwrite(fName, cvImage)
 
 # Make sure the destination path is present before starting to store the frames
 dirName = "output"
@@ -35,7 +41,7 @@ pipeline = dai.Pipeline()
 
 # Create ColorCamera node
 colorCamera = pipeline.create(dai.node.ColorCamera)
-colorCamera.setResolution(colorCameraResolution)
+# colorCamera.setResolution(colorCameraResolution)
 colorCamera.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
 colorCamera.setFps(globalFPS)
 #colorCamera.setStillSize(1280, 800)
@@ -60,7 +66,6 @@ colorCamera.still.link(colorCameraStill_Out.input)
 # colorCameraEncoder.bitstream.link(colorCameraEncoder_Out.input)
 
 
-
 # #############################
 # DEPTH
 
@@ -70,14 +75,14 @@ monoRight.setResolution(monoCameraResolution)
 monoRight.setBoardSocket(dai.CameraBoardSocket.RIGHT)
 monoRight.setFps(globalFPS)
 # 3A algorithms (auto exposure, auto white balance and auto focus) won’t be run every frame, but every 15 frames
-#monoRight.setIsp3aFps(15)
+# monoRight.setIsp3aFps(15)
 
 monoLeft = pipeline.create(dai.node.MonoCamera)
 monoLeft.setResolution(monoCameraResolution)
 monoLeft.setBoardSocket(dai.CameraBoardSocket.LEFT)
 monoLeft.setFps(globalFPS)
 # 3A algorithms (auto exposure, auto white balance and auto focus) won’t be run every frame, but every 15 frames
-#monoLeft.setIsp3aFps(15)
+# monoLeft.setIsp3aFps(15)
 
 # Create StereoDepth node
 stereoDepth = pipeline.create(dai.node.StereoDepth)
@@ -89,13 +94,13 @@ stereoDepth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURAC
 # To prioritize accuracy, sets Confidence threshold to 200 .. ..or use: stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
 threshold = 255 # Can range between 0:max confidence - 255:min confidence
 stereoDepth.initialConfig.setConfidenceThreshold(threshold)
-stereoDepth.setOutputSize(width, height) # Required to prevent depth scaling
+# stereoDepth.setOutputSize(width, height) # Required to prevent depth scaling
 # Options: MEDIAN_OFF, KERNEL_3x3, KERNEL_5x5, KERNEL_7x7 (default)
-#stereoDepth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
-#stereoDepth.initialConfig.setDisparityShift(25) # This will reduce MaxZ to ~140 cm
+# stereoDepth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
+# stereoDepth.initialConfig.setDisparityShift(25) # This will reduce MaxZ to ~140 cm
 # LeftRightCheck(True) = Better handling for occlusions but has a performance cost
 # LR-check is required for depth alignment
-stereoDepth.setLeftRightCheck(True)
+# stereoDepth.setLeftRightCheck(True)
 # ExtendedDisparity(True) = Closer-in minimum depth, disparity range is doubled:
 # stereoDepth.setExtendedDisparity(True)
 # Subpixel(True) = Better accuracy for longer distance, fractional disparity 32-levels:
@@ -139,7 +144,8 @@ with dai.Device(pipeline) as device:
     # cv2.namedWindow("Preview")
     
     i = 1
-    counter = 0
+    counter4FPS = 0
+    counter4AutoExposure = 1
     start = time.time()
     while (True):
         depthImg: dai.ImgFrame = stereoDepth_Depth_OutQueue.tryGet()
@@ -157,7 +163,9 @@ with dai.Device(pipeline) as device:
             # Get the uint16 array
             depthCVimage = depthImg.getCvFrame() # A CVImage is actually just an array of row-arrays, each row being a single array of column-values.
             fName = f"{dirName}/{osTimes}_depth_gray.tiff"
-            cv2.imwrite(fName, depthCVimage)
+            if (shouldSave(counter4AutoExposure)):
+                # cv2.imwrite(fName, depthCVimage)
+                Thread(target=cvSaveFile, args=(fName, depthCVimage)).start()
             
             # Depth as numpy.ndarray
             # maxDepth = np.max(depthCVimage)
@@ -184,6 +192,8 @@ with dai.Device(pipeline) as device:
             fName = f"{dirName}/{osTimes}_disparity_gray.png"
             # cv2.imwrite(fName, disparityCvImage)
             # disparityFrame = disparityImg.getFrame() # A Frame is actually just an 'numpy.ndarray'
+            
+            # DISPARITY - COLOURED
             # Normalize for better visualization
             maxDisparity = stereoDepth.initialConfig.getMaxDisparity()
             disparityCvImageScaled = (disparityCvImage * (255 / maxDisparity)).astype(np.uint8)
@@ -192,7 +202,9 @@ with dai.Device(pipeline) as device:
             # Available color maps: https://docs.opencv.org/3.4/d3/d50/group__imgproc__colormap.html
             disparityCvImageScaledColored = cv2.applyColorMap(disparityCvImageScaled, cv2.COLORMAP_JET)
             fName = f"{dirName}/{osTimes}_disparity_scaled_colored.png"
-            cv2.imwrite(fName, disparityCvImageScaledColored)
+            if (shouldSave(counter4AutoExposure)):
+                # cv2.imwrite(fName, disparityCvImageScaledColored)
+                Thread(target=cvSaveFile, args=(fName, disparityCvImageScaledColored)).start()
             
             # SHOW COLOR DISPARITY IMAGE
             # try:
@@ -211,23 +223,30 @@ with dai.Device(pipeline) as device:
                 # colorImg: dai.ImgFrame = colorCameraEncoder_OutQueue.get()
                 colorImg: dai.ImgFrame = colorCameraStill_OutQueue.get()
                 colorCvFrame = colorImg.getCvFrame()
-                cv2.imwrite(fName, colorCvFrame)
-                with open(f"{dirName}/{osTimes}_rgb_color.png", "wb") as f:
-                    f.write(colorImg.getData())
-                    print('RGB Image saved to', fName)     
+                if (shouldSave(counter4AutoExposure)):
+                    # cv2.imwrite(fName, colorCvFrame)
+                    Thread(target=cvSaveFile, args=(fName, colorCvFrame)).start()
+                # with open(f"{dirName}/{osTimes}_rgb_color.png", "wb") as f:
+                #     f.write(colorImg.getData())
+                #     print('RGB Image saved to', fName)
             
-            counter += 1
-            if (counter % 5 == 0):                
+            counter4FPS += 1
+            if (counter4FPS % 5 == 0):                
                 stop = time.time()
                 elapsed = stop - start
                 FPS =  5.0 / elapsed
-                print(f"  => {FPS:.1f} FPS")
+                print(f'   ### {counter4AutoExposure} ###   =>  {FPS:.1f} FPS')
                 # reset 
-                counter = 0
+                counter4FPS = 0
                 start = time.time()
-            key = cv2.waitKey(10)
+            else:
+                print(f'   ### {counter4AutoExposure} ###')
+            
+            counter4AutoExposure += 1
+            
+            key = cv2.waitKey(1)
             if key == ord(' ') or key == ord('q'):
-                break  
+                break
 
 '''
 configInNode = pipeline.create(dai.node.XLinkIn)
@@ -244,22 +263,4 @@ configInNode.setStreamName('config')
 ispOutNode.setStreamName('isp')
 videoOutNode.setStreamName('video')
 stillMjpegOutNode.setStreamName('still')
-'''
-
-'''
-# Upload the pipeline to the device
-with dai.Device(pipeline) as device:
-    # Print MxID, USB speed, and available cameras on the device
-    print('MxId:', device.getDeviceInfo().getMxId())
-    print('USB speed:', device.getUsbSpeed())
-    print('Connected cameras:', device.getConnectedCameras())
-
-    device.startPipeline()
-    controlInQueue = device.getInputQueue("controlInNode")
-
-    # Create a CameraControl object
-    cameraControl = dai.CameraControl()
-    cameraControl.setCaptureStill(True)
-    # Send a message to controlInQueue
-    controlInQueue.send(cameraControl)
 '''
