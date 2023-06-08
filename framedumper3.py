@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from datetime import timedelta
 from pathlib import Path
 from threading import Thread
 import time
@@ -12,7 +13,7 @@ import depthai as dai
 # Weights to use when blending depth/rgb image (should equal 1.0)
 rgbWeight = 0.4
 depthWeight = 0.6
-fps = int(30)
+fps = 2
 autoExposureSetsAfterFrameCount = 40
 # #################################
 
@@ -149,18 +150,22 @@ with device:
     start = time.time()
     
     while True:        
-        osTimes = int(time.time_ns() / 1_000_000) # Milliseconds
-        
+        printTime = int(time.time_ns() / 1_000_000) # Milliseconds
+        frameTimesdelta: timedelta = None
         latestPacket = {}
-        latestPacket["rgb"] = None
-        latestPacket["depth"] = None
-        latestPacket["disparity"] = None
+        latestPacket["rgb"]: dai.ImgFrame = None
+        latestPacket["depth"]: dai.ImgFrame = None
+        latestPacket["disparity"]: dai.ImgFrame = None
 
         queueEvents = device.getQueueEvents(("rgb", "depth", "disparity"))
         for queueName in queueEvents:
             packets = device.getOutputQueue(queueName).tryGetAll()
             if len(packets) > 0:
-                latestPacket[queueName] = packets[-1]
+                print(f"Events # {queueEvents}")
+                latestPacket[queueName]: dai.ImgFrame = packets[-1]
+                f: dai.ImgFrame = latestPacket[queueName] 
+                frameTimesdelta = f.getTimestamp()
+                printTime = f"{frameTimesdelta.seconds}_{frameTimesdelta.microseconds}"
 
         # COLOR
         if latestPacket["rgb"] is not None:
@@ -169,7 +174,7 @@ with device:
             # rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
             # cv2.imshow(rgbWindowName, rgbFrame)            
             rgbFrameCount += 1
-            fName = f"{dirName}/{osTimes}_rgb_color.jpg"            
+            fName = f"{dirName}/{printTime}_rgb_color.jpg"            
             if (shouldSave(loopCounter)):
                 cv2.imwrite(fName, rgbFrame)
                 # Thread(target=cvSaveFile, args=(fName, rgbFrame)).start()
@@ -181,7 +186,7 @@ with device:
             depthFrame = latestPacket["depth"].getFrame()
             depthFrame = cv2.resize(depthFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
             depthFrameCount += 1
-            fName = f"{dirName}/{osTimes}_depth_gray.tiff"
+            fName = f"{dirName}/{printTime}_depth_gray.tiff"
             if (shouldSave(loopCounter)):
                 cv2.imwrite(fName, depthFrame)
                 # Thread(target=cvSaveFile, args=(fName, depthFrame)).start()
@@ -200,7 +205,7 @@ with device:
             # cv2.imshow(depthWindowName, depthFrame)
             disparityFrameCount += 1
             # print(f"Got disparityFrame # {disparityFrameCount}")            
-            fName = f"{dirName}/{osTimes}_disparity_scaled_colored.jpg"
+            fName = f"{dirName}/{printTime}_disparity_scaled_colored.jpg"
             if (shouldSave(loopCounter)):
                 cv2.imwrite(fName, disparityFrame)
                 # Thread(target=cvSaveFile, args=(fName, disparityFrame)).start()
