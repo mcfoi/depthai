@@ -171,8 +171,8 @@ with device:
             rgbFrameCount += 1
             fName = f"{dirName}/{osTimes}_rgb_color.jpg"            
             if (shouldSave(loopCounter)):
-                # cv2.imwrite(fName, rgbFrame)
-                Thread(target=cvSaveFile, args=(fName, rgbFrame)).start()
+                cv2.imwrite(fName, rgbFrame)
+                # Thread(target=cvSaveFile, args=(fName, rgbFrame)).start()
                 # print(f"Got rgbFrame # {rgbFrameCount}")
                 pass
 
@@ -183,8 +183,8 @@ with device:
             depthFrameCount += 1
             fName = f"{dirName}/{osTimes}_depth_gray.tiff"
             if (shouldSave(loopCounter)):
-                # cv2.imwrite(fName, depthCVimage)
-                Thread(target=cvSaveFile, args=(fName, depthFrame)).start()
+                cv2.imwrite(fName, depthFrame)
+                # Thread(target=cvSaveFile, args=(fName, depthFrame)).start()
                 # print(f"Got depthFrame # {depthFrameCount}")
                 pass
 
@@ -202,8 +202,8 @@ with device:
             # print(f"Got disparityFrame # {disparityFrameCount}")            
             fName = f"{dirName}/{osTimes}_disparity_scaled_colored.jpg"
             if (shouldSave(loopCounter)):
-                # cv2.imwrite(fName, disparityCvImageScaledColored)
-                Thread(target=cvSaveFile, args=(fName, disparityFrame)).start()
+                cv2.imwrite(fName, disparityFrame)
+                # Thread(target=cvSaveFile, args=(fName, disparityFrame)).start()
                 # print(f"Got disparityFrame # {disparityFrameCount}")
                 pass
 
