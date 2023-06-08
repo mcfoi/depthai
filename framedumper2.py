@@ -30,6 +30,21 @@ def shouldSave(frameCounter: int):
 def cvSaveFile(fName: str, cvImage: object):
     cv2.imwrite(fName, cvImage)
 
+def printFPS(start, counter4AutoExposure, counter4FPS):
+    counter4FPS += 1
+    if (counter4FPS % 5 == 0):                
+        stop = time.time()
+        elapsed = stop - start
+        FPS =  5.0 / elapsed
+        print(f'   ### {counter4AutoExposure} ###   =>  {FPS:.1f} FPS')
+        # reset 
+        counter4FPS = 0
+        start = time.time()
+        return (start, counter4FPS)
+    else:
+        print(f'   ### {counter4AutoExposure} ###')
+        return (start, counter4FPS)
+
 # Make sure the destination path is present before starting to store the frames
 dirName = "output"
 Path(dirName).mkdir(parents=True, exist_ok=True)
@@ -230,18 +245,11 @@ with dai.Device(pipeline) as device:
                     Thread(target=cvSaveFile, args=(fName, colorCvFrame)).start()
                 # with open(f"{dirName}/{osTimes}_rgb_color.png", "wb") as f:
                 #     f.write(colorImg.getData())
-                #     print('RGB Image saved to', fName)            
-            counter4FPS += 1
-            if (counter4FPS % 5 == 0):                
-                stop = time.time()
-                elapsed = stop - start
-                FPS =  5.0 / elapsed
-                print(f'   ### {counter4AutoExposure} ###   =>  {FPS:.1f} FPS')
-                # reset 
-                counter4FPS = 0
-                start = time.time()
-            else:
-                print(f'   ### {counter4AutoExposure} ###')
+                #     print('RGB Image saved to', fName)
+                
+            # FPS       
+            (start, counter4FPS) = printFPS(start, counter4AutoExposure, counter4FPS)
+            
             counter4AutoExposure += 1
             
             # SET ESCAPE-KEY

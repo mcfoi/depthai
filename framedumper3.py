@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+from threading import Thread
 import time
 import cv2
 import numpy as np
@@ -11,6 +12,7 @@ import depthai as dai
 # Weights to use when blending depth/rgb image (should equal 1.0)
 rgbWeight = 0.4
 depthWeight = 0.6
+fps = int(30)
 autoExposureSetsAfterFrameCount = 40
 # #################################
 
@@ -25,22 +27,32 @@ def updateBlendWeights(percent_rgb):
     rgbWeight = float(percent_rgb)/100.0
     depthWeight = 1.0 - rgbWeight
 
-
-
 def shouldSave(frameCounter: int):
     return frameCounter > autoExposureSetsAfterFrameCount
 
 def cvSaveFile(fName: str, cvImage: object):
-    cv2.imwrite(fName, cvImage)    
+    cv2.imwrite(fName, cvImage)
+
+'''Computes FPS using an average over 5 loops'''
+def printFPS(start, loopCounter, fpsCounter):
+    fpsCounter += 1
+    if (fpsCounter % 5 == 0):                
+        stop = time.time()
+        elapsed = stop - start
+        _fps =  5.0 / elapsed
+        print(f'   ### {loopCounter} ###   =>  {_fps:.1f} fps')
+        # reset 
+        fpsCounter = 0
+        start = time.time()
+        return (start, fpsCounter)
+    else:
+        print(f'   ### {loopCounter} ###')
+        return (start, fpsCounter)
 
 # Make sure the destination path is present before starting to store the frames
 dirName = "output"
 Path(dirName).mkdir(parents=True, exist_ok=True)
 
-# Optional. If set (True), the ColorCamera is downscaled from 1080p to 720p.
-# Otherwise (False), the aligned depth is automatically upscaled to 1080p
-downscaleColor = True
-fps = 10
 # The disparity is computed at this resolution, then upscaled to RGB resolution
 monoResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P
 
@@ -62,9 +74,9 @@ rgbOut.setStreamName("rgb")
 depthOut.setStreamName("depth")
 disparityOut.setStreamName("disparity")
 
-#Properties
 camRgb.setBoardSocket(dai.CameraBoardSocket.RGB)
 camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_12_MP) # 4056x3040
+camRgb.setFps(fps)
 
 # CALIBRATION : NOT REQUIRED IN FIXED-FOCUS CAMERAS
 try:
@@ -102,8 +114,6 @@ stereo.depth.link(depthOut.input)
 stereo.disparity.link(disparityOut.input)
 
 
-counter4AutoExposure = 1
-start = time.time()
 # Connect to device and start pipeline
 with device:
     device.startPipeline(pipeline)
@@ -123,15 +133,22 @@ with device:
     blendedWindowName = "rgb-depth"
     # cv2.namedWindow(rgbWindowName)
     # cv2.namedWindow(depthWindowName)
-    cv2.namedWindow(blendedWindowName)
+    WINDOW_NORMAL = 0x00000000 #cv2.WINDOW_NORMAL
+    WINDOW_AUTOSIZE = 0x00000001 #cv2.WINDOW_AUTOSIZE
+    WINDOW_KEEPRATIO = 0x00000000 #cv2.WINDOW_KEEPRATIO
+    WINDOW_GUI_EXPANDED = 0x00000000 # cv2.WINDOW_GUI_EXPANDED
+    flags = WINDOW_NORMAL & WINDOW_KEEPRATIO & WINDOW_GUI_EXPANDED
+    cv2.namedWindow(blendedWindowName, flags)
     cv2.createTrackbar('RGB Weight %', blendedWindowName, int(rgbWeight*100), 100, updateBlendWeights)
 
+    loopCounter = 1
+    fpsCounter = 0
     rgbFrameCount = 0
     depthFrameCount = 0
     disparityFrameCount = 0
+    start = time.time()
     
-    while True:
-        
+    while True:        
         osTimes = int(time.time_ns() / 1_000_000) # Milliseconds
         
         latestPacket = {}
@@ -143,43 +160,67 @@ with device:
         for queueName in queueEvents:
             packets = device.getOutputQueue(queueName).tryGetAll()
             if len(packets) > 0:
-                latestPacket[queueName] = packets[-1]            
-            counter4AutoExposure += 1
+                latestPacket[queueName] = packets[-1]
 
+        # COLOR
         if latestPacket["rgb"] is not None:
             rgbFrame = latestPacket["rgb"].getCvFrame()
-            rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
-            # cv2.imshow(rgbWindowName, rgbFrame)
+            rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+            # rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
+            # cv2.imshow(rgbWindowName, rgbFrame)            
             rgbFrameCount += 1
-            print(f"Got rgbFrame # {rgbFrameCount}")
+            fName = f"{dirName}/{osTimes}_rgb_color.jpg"            
+            if (shouldSave(loopCounter)):
+                # cv2.imwrite(fName, rgbFrame)
+                Thread(target=cvSaveFile, args=(fName, rgbFrame)).start()
+                # print(f"Got rgbFrame # {rgbFrameCount}")
+                pass
 
+        # DEPTH
         if latestPacket["depth"] is not None:
             depthFrame = latestPacket["depth"].getFrame()
+            depthFrame = cv2.resize(depthFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
             depthFrameCount += 1
-            print(f"Got depthFrame # {depthFrameCount}")
+            fName = f"{dirName}/{osTimes}_depth_gray.tiff"
+            if (shouldSave(loopCounter)):
+                # cv2.imwrite(fName, depthCVimage)
+                Thread(target=cvSaveFile, args=(fName, depthFrame)).start()
+                # print(f"Got depthFrame # {depthFrameCount}")
+                pass
 
+        # DISPARITY
         if latestPacket["disparity"] is not None:
             disparityFrame = latestPacket["disparity"].getFrame()
-            disparityFrame = cv2.normalize(disparityFrame, None, 255, 0, cv2.NORM_MINMAX, cv2.CV_8UC1)
+            maxDisparity = stereo.initialConfig.getMaxDisparity()
+            disparityFrame = (disparityFrame * (255 / maxDisparity)).astype(np.uint8) # MY addition
+            disparityFrame = cv2.resize(disparityFrame, (1248, 936), interpolation=cv2.INTER_LINEAR) # MY addition
+            # disparityFrame = cv2.normalize(disparityFrame, None, 255, 0, cv2.NORM_MINMAX, cv2.CV_8UC1)
             # depthFrame = cv2.equalizeHist(depthFrame)
             disparityFrame = cv2.applyColorMap(disparityFrame, cv2.COLORMAP_JET)
             # cv2.imshow(depthWindowName, depthFrame)
             disparityFrameCount += 1
-            print(f"Got disparityFrame # {disparityFrameCount}")            
-            fName = f"{dirName}/{osTimes}_disparity_scaled_colored.png"
-            if (shouldSave(counter4AutoExposure)):
+            # print(f"Got disparityFrame # {disparityFrameCount}")            
+            fName = f"{dirName}/{osTimes}_disparity_scaled_colored.jpg"
+            if (shouldSave(loopCounter)):
                 # cv2.imwrite(fName, disparityCvImageScaledColored)
-                Thread(target=cvSaveFile, args=(fName, disparityCvImageScaledColored)).start()
+                Thread(target=cvSaveFile, args=(fName, disparityFrame)).start()
+                # print(f"Got disparityFrame # {disparityFrameCount}")
+                pass
 
         # Blend when both received
-        # if rgbFrame is not None and disparityFrame is not None:
-        #     # Need to have both frames in BGR format before blending
-        #     if len(disparityFrame.shape) < 3:
-        #         disparityFrame = cv2.cvtColor(depthFrame, cv2.COLOR_GRAY2BGR)
-        #     blended = cv2.addWeighted(rgbFrame, rgbWeight, disparityFrame, depthWeight, 0)
-        #     cv2.imshow(blendedWindowName, blended)
-        #     rgbFrame = None
-        #     disparityFrame = None
-
+        if rgbFrame is not None and disparityFrame is not None:
+            # Need to have both frames in BGR format before blending
+            if len(disparityFrame.shape) < 3:
+                disparityFrame = cv2.cvtColor(depthFrame, cv2.COLOR_GRAY2BGR)
+            blended = cv2.addWeighted(rgbFrame, rgbWeight, disparityFrame, depthWeight, 0)
+            cv2.imshow(blendedWindowName, blended)
+            rgbFrame = None
+            disparityFrame = None
+                
+        # FPS
+        (start, fpsCounter) = printFPS(start, loopCounter, fpsCounter)
+        
         if cv2.waitKey(1) == ord('q'):
             break
+        
+        loopCounter += 1
