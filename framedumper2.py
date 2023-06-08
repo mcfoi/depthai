@@ -9,8 +9,9 @@ import cv2
 import numpy as np
 
 # #################################
+# CONSTANTS
 globalFPS = 5.0 # float(1.0/10.0)
-monoCameraResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P # MXA is THE_800_P for MonoCamera
+monoCameraResolution = dai.MonoCameraProperties.SensorResolution.THE_800_P # MAX for MonoCamera is THE_800_P
 colorCameraResolution = dai.ColorCameraProperties.SensorResolution.THE_800_P
 width:int = 1280
 height:int = 800
@@ -214,12 +215,13 @@ with dai.Device(pipeline) as device:
             # except Exception as e:
             #     cv2.destroyAllWindows()
             
+            # DEQUEUE 'STILL' COLOR CAMERA IMAGES
             stop = time.time()
             elapsed = stop - start            
             # Save RGB still frame
             # if colorCameraEncoder_OutQueue.has():
             if colorCameraStill_OutQueue.has():
-                fName = f"{dirName}/{osTimes}_rgb_color_2.png"
+                fName = f"{dirName}/{osTimes}_rgb_color.jpg"
                 # colorImg: dai.ImgFrame = colorCameraEncoder_OutQueue.get()
                 colorImg: dai.ImgFrame = colorCameraStill_OutQueue.get()
                 colorCvFrame = colorImg.getCvFrame()
@@ -228,8 +230,7 @@ with dai.Device(pipeline) as device:
                     Thread(target=cvSaveFile, args=(fName, colorCvFrame)).start()
                 # with open(f"{dirName}/{osTimes}_rgb_color.png", "wb") as f:
                 #     f.write(colorImg.getData())
-                #     print('RGB Image saved to', fName)
-            
+                #     print('RGB Image saved to', fName)            
             counter4FPS += 1
             if (counter4FPS % 5 == 0):                
                 stop = time.time()
@@ -241,9 +242,9 @@ with dai.Device(pipeline) as device:
                 start = time.time()
             else:
                 print(f'   ### {counter4AutoExposure} ###')
-            
             counter4AutoExposure += 1
             
+            # SET ESCAPE-KEY
             key = cv2.waitKey(1)
             if key == ord(' ') or key == ord('q'):
                 break
