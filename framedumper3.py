@@ -13,7 +13,7 @@ import depthai as dai
 # Weights to use when blending depth/rgb image (should equal 1.0)
 rgbWeight = 0.4
 depthWeight = 0.6
-fps = 5
+fps = 2
 autoExposureSetsAfterFrameCount = 40
 # #################################
 
@@ -41,7 +41,8 @@ def printFPS(start, loopCounter, fpsCounter):
         stop = time.time()
         elapsed = stop - start
         _fps =  5.0 / elapsed
-        print(f'   ### {loopCounter} ###   =>  {_fps:.1f} fps')
+        #print(f'   ### {loopCounter} ###   =>  {_fps:.1f} fps')
+        print(f'   ### {loopCounter} ###')
         # reset 
         fpsCounter = 0
         start = time.time()
@@ -81,10 +82,10 @@ camRgb.setFps(fps)
 # Initial configration to reduce timings
 camRgb.initialControl.setAntiBandingMode(dai.RawCameraControl.AntiBandingMode.OFF)
 camRgb.initialControl.setAutoWhiteBalanceMode(dai.RawCameraControl.AutoWhiteBalanceMode.DAYLIGHT)
-# 1/250 = 4000 Us; 1/360 = 2777 us; 1/500 = 2000 Us; 1/1000 = 1000 Us
+# 1/250 = 4000 Us; 1/360 = 2777 Us; 1/500 = 2000 Us; 1/1000 = 1000 Us
 exposureMicrosec = 2000
 exposureIso = 3200
-camRgb.initialControl.setManualExposure(exposureMicrosec, exposureIso)
+#camRgb.initialControl.setManualExposure(exposureMicrosec, exposureIso)
 
 # CALIBRATION : NOT REQUIRED IN FIXED-FOCUS CAMERAS
 try:
@@ -178,6 +179,8 @@ with device:
         if latestPacket["rgb"] is not None:
             rgbFrame = latestPacket["rgb"].getCvFrame()
             rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+            exposure_millisec = latestPacket["rgb"].getExposureTime().total_seconds()
+            print(f'Exposure: 1/{1.0/exposure_millisec:.0f} s')
             # rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
             # cv2.imshow(rgbWindowName, rgbFrame)            
             rgbFrameCount += 1
