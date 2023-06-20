@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from datetime import timedelta
+import os
 from pathlib import Path
 from threading import Thread
 import time
@@ -50,6 +51,18 @@ def printFPS(start, loopCounter, fpsCounter):
     else:
         print(f'   ### {loopCounter} ###')
         return (start, fpsCounter)
+
+def getPrintTime(imgFrame: dai.ImgFrame) -> str:
+    # imgFrame: dai.ImgFrame = latestPacket["rgb"]
+    imgFrameTimesdelta = imgFrame.getTimestamp()
+    printTime = f"{imgFrameTimesdelta.seconds}_{imgFrameTimesdelta.microseconds}"
+    return printTime
+
+def renameDir(dirName):
+    i = 1
+    while(Path.exists(Path(dirName+str(i)))):
+        i += 1
+    os.rename(dirName, dirName+str(i))
 
 # Make sure the destination path is present before starting to store the frames
 dirName = "output"
@@ -157,7 +170,17 @@ with device:
     disparityFrameCount = 0
     start = time.time()
     
-    while True:        
+    while True:
+        # Check if the windows is still displayed or was closed using UI buttons
+        try:
+            # getWindowProperty will fail in no windows exists!
+            autosize = cv2.getWindowProperty(blendedWindowName, 1)                
+        except:
+            # rename ouptut dir
+            renameDir(dirName)
+            # exit the loop
+            break
+        
         printTime = int(time.time_ns() / 1_000_000) # Milliseconds
         frameTimesdelta: timedelta = None
         latestPacket = {}
@@ -166,18 +189,21 @@ with device:
         latestPacket["disparity"]: dai.ImgFrame = None
 
         queueEvents = device.getQueueEvents(("rgb", "depth", "disparity"))
+        print(f"Events # {queueEvents}")
         for queueName in queueEvents:
-            packets = device.getOutputQueue(queueName).tryGetAll()
+            packets = device.getOutputQueue(queueName).getAll()
             if len(packets) > 0:
-                print(f"Events # {queueEvents}")
                 latestPacket[queueName]: dai.ImgFrame = packets[-1]
-                f: dai.ImgFrame = latestPacket[queueName] 
-                frameTimesdelta = f.getTimestamp()
-                printTime = f"{frameTimesdelta.seconds}_{frameTimesdelta.microseconds}"
+                # f: dai.ImgFrame = latestPacket[queueName] 
+                # frameTimesdelta = f.getTimestamp()
+                # printTime = f"{frameTimesdelta.seconds}_{frameTimesdelta.microseconds}"
+                
 
         # COLOR
         if latestPacket["rgb"] is not None:
-            rgbFrame = latestPacket["rgb"].getCvFrame()
+            imgFrame: dai.ImgFrame = latestPacket["rgb"]
+            printTime = getPrintTime(imgFrame)
+            rgbFrame = imgFrame.getCvFrame()
             rgbFrame = cv2.resize(rgbFrame, (1248, 936), interpolation=cv2.INTER_NEAREST).astype(np.uint8)
             exposure_millisec = latestPacket["rgb"].getExposureTime().total_seconds()
             print(f'Exposure: 1/{1.0/exposure_millisec:.0f} s')
@@ -193,7 +219,9 @@ with device:
 
         # DEPTH
         if latestPacket["depth"] is not None:
-            depthFrame = latestPacket["depth"].getFrame()
+            imgFrame: dai.ImgFrame = latestPacket["depth"]
+            printTime = getPrintTime(imgFrame)
+            depthFrame = imgFrame.getFrame()
             depthFrame = cv2.resize(depthFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
             depthFrameCount += 1
             fName = f"{dirName}/{printTime}_depth_gray.tiff"
@@ -205,7 +233,9 @@ with device:
 
         # DISPARITY
         if latestPacket["disparity"] is not None:
-            disparityFrame = latestPacket["disparity"].getFrame()
+            imgFrame: dai.ImgFrame = latestPacket["disparity"]
+            printTime = getPrintTime(imgFrame)
+            disparityFrame = imgFrame.getFrame()
             maxDisparity = stereo.initialConfig.getMaxDisparity()
             disparityFrame = (disparityFrame * (255 / maxDisparity)).astype(np.uint8) # MY addition
             disparityFrame = cv2.resize(disparityFrame, (1248, 936), interpolation=cv2.INTER_LINEAR) # MY addition
