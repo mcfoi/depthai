@@ -16,6 +16,9 @@ rgbWeight = 0.4
 depthWeight = 0.6
 fps = 2
 autoExposureSetsAfterFrameCount = 40
+exposureMicrosec = 2000
+exposureIso = 3200
+manualExposure = False
 # #################################
 
 
@@ -96,9 +99,8 @@ camRgb.setFps(fps)
 camRgb.initialControl.setAntiBandingMode(dai.RawCameraControl.AntiBandingMode.OFF)
 camRgb.initialControl.setAutoWhiteBalanceMode(dai.RawCameraControl.AutoWhiteBalanceMode.DAYLIGHT)
 # 1/250 = 4000 Us; 1/360 = 2777 Us; 1/500 = 2000 Us; 1/1000 = 1000 Us
-exposureMicrosec = 2000
-exposureIso = 3200
-#camRgb.initialControl.setManualExposure(exposureMicrosec, exposureIso)
+if (manualExposure):
+    camRgb.initialControl.setManualExposure(exposureMicrosec, exposureIso)
 
 # CALIBRATION : NOT REQUIRED IN FIXED-FOCUS CAMERAS
 try:
