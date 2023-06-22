@@ -15,10 +15,11 @@ import depthai as dai
 rgbWeight = 0.4
 depthWeight = 0.6
 fps = 2
-autoExposureSetsAfterFrameCount = 40
+autoExposureSetsAfterFrameCount = 100
 exposureMicrosec = 2000
 exposureIso = 3200
 manualExposure = False
+dumpDisparityCost = True
 # #################################
 
 
@@ -87,10 +88,12 @@ stereo = pipeline.create(dai.node.StereoDepth)
 rgbOut = pipeline.create(dai.node.XLinkOut)
 depthOut = pipeline.create(dai.node.XLinkOut)
 disparityOut = pipeline.create(dai.node.XLinkOut)
+debugDispCostDumptOut = pipeline.create(dai.node.XLinkOut)
 
 rgbOut.setStreamName("rgb")
 depthOut.setStreamName("depth")
 disparityOut.setStreamName("disparity")
+debugDispCostDumptOut.setStreamName("debugDispCostDump")
 
 camRgb.setBoardSocket(dai.CameraBoardSocket.RGB)
 camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_12_MP) # 4056x3040
@@ -118,7 +121,7 @@ right.setResolution(monoResolution)
 right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
 right.setFps(fps)
 
-stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
 # LR-check is required for depth alignment
 stereo.setLeftRightCheck(True)
 # ExtendedDisparity(True) = Closer-in minimum depth, disparity range is doubled:
@@ -136,6 +139,7 @@ left.out.link(stereo.left)
 right.out.link(stereo.right)
 stereo.depth.link(depthOut.input)
 stereo.disparity.link(disparityOut.input)
+stereo.debugDispCostDump.link(debugDispCostDumptOut.input)
 
 
 # Connect to device and start pipeline
@@ -189,8 +193,9 @@ with device:
         latestPacket["rgb"]: dai.ImgFrame = None
         latestPacket["depth"]: dai.ImgFrame = None
         latestPacket["disparity"]: dai.ImgFrame = None
+        latestPacket["debugDispCostDump"]: dai.ImgFrame = None
 
-        queueEvents = device.getQueueEvents(("rgb", "depth", "disparity"))
+        queueEvents = device.getQueueEvents(("rgb", "depth", "disparity", "debugDispCostDump"))
         print(f"Events # {queueEvents}")
         for queueName in queueEvents:
             packets = device.getOutputQueue(queueName).getAll()
@@ -232,6 +237,17 @@ with device:
                 # Thread(target=cvSaveFile, args=(fName, depthFrame)).start()
                 # print(f"Got depthFrame # {depthFrameCount}")
                 pass
+        
+        # DISPARITY COST - for POST PROCESSING ONLY
+        if latestPacket["debugDispCostDump"] is not None and dumpDisparityCost:
+            imgFrame: dai.ImgFrame = latestPacket["debugDispCostDump"]
+            printTime = getPrintTime(imgFrame)
+            disparityCostFrame = imgFrame.getFrame()
+            # depthFrame = cv2.resize(depthFrame, (1248, 936), interpolation=cv2.INTER_NEAREST)
+            fName = f"{dirName}/{printTime}_disparity_cost.tiff"
+            cv2.imwrite(fName, disparityCostFrame)
+            if (shouldSave(loopCounter)):
+                cv2.imwrite(fName, depthFrame)
 
         # DISPARITY
         if latestPacket["disparity"] is not None:
