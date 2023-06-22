@@ -19,6 +19,7 @@ autoExposureSetsAfterFrameCount = 40
 exposureMicrosec = 2000
 exposureIso = 3200
 manualExposure = False
+confidenceDump = True
 # #################################
 
 
@@ -87,10 +88,12 @@ stereo = pipeline.create(dai.node.StereoDepth)
 rgbOut = pipeline.create(dai.node.XLinkOut)
 depthOut = pipeline.create(dai.node.XLinkOut)
 disparityOut = pipeline.create(dai.node.XLinkOut)
+confidenceMapOut = pipeline.create(dai.node.XLinkOut)
 
 rgbOut.setStreamName("rgb")
 depthOut.setStreamName("depth")
 disparityOut.setStreamName("disparity")
+confidenceMapOut.setStreamName("confidence")
 
 camRgb.setBoardSocket(dai.CameraBoardSocket.RGB)
 camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_12_MP) # 4056x3040
@@ -127,6 +130,7 @@ stereo.setExtendedDisparity(True)
 # Subpixel(True) = Better accuracy for longer distance, fractional disparity 32-levels:
 stereo.setSubpixel(True)
 # Alignment
+# NOTE: RGB-depth alignment doesn’t work when using disparity shift.
 stereo.setDepthAlign(dai.CameraBoardSocket.RGB)
 # # 4056x3040
 stereo.setOutputSize(1248, 936)
@@ -137,6 +141,7 @@ left.out.link(stereo.left)
 right.out.link(stereo.right)
 stereo.depth.link(depthOut.input)
 stereo.disparity.link(disparityOut.input)
+stereo.confidenceMap.link(confidenceMapOut.input)
 
 
 # Connect to device and start pipeline
@@ -190,8 +195,9 @@ with device:
         latestPacket["rgb"]: dai.ImgFrame = None
         latestPacket["depth"]: dai.ImgFrame = None
         latestPacket["disparity"]: dai.ImgFrame = None
+        latestPacket["confidence"]: dai.ImgFrame = None
 
-        queueEvents = device.getQueueEvents(("rgb", "depth", "disparity"))
+        queueEvents = device.getQueueEvents(("rgb", "depth", "disparity", "confidence"))
         print(f"Events # {queueEvents}")
         for queueName in queueEvents:
             packets = device.getOutputQueue(queueName).getAll()
@@ -242,18 +248,23 @@ with device:
             maxDisparity = stereo.initialConfig.getMaxDisparity()
             disparityFrame = (disparityFrame * (255 / maxDisparity)).astype(np.uint8) # MY addition
             disparityFrame = cv2.resize(disparityFrame, (1248, 936), interpolation=cv2.INTER_LINEAR) # MY addition
-            # disparityFrame = cv2.normalize(disparityFrame, None, 255, 0, cv2.NORM_MINMAX, cv2.CV_8UC1)
-            # depthFrame = cv2.equalizeHist(depthFrame)
             disparityFrame = cv2.applyColorMap(disparityFrame, cv2.COLORMAP_JET)
-            # cv2.imshow(depthWindowName, depthFrame)
-            disparityFrameCount += 1
-            # print(f"Got disparityFrame # {disparityFrameCount}")            
+            disparityFrameCount += 1          
             fName = f"{dirName}/{printTime}_disparity_scaled_colored.jpg"
             if (shouldSave(loopCounter)):
                 cv2.imwrite(fName, disparityFrame)
                 # Thread(target=cvSaveFile, args=(fName, disparityFrame)).start()
                 # print(f"Got disparityFrame # {disparityFrameCount}")
                 pass
+           
+        # CONFIDENCE - TO BE TESTED
+        if confidenceDump and latestPacket["confidence"] is not None:
+            imgFrame: dai.ImgFrame = latestPacket["confidence"]
+            printTime = getPrintTime(imgFrame)
+            confidenceFrame = imgFrame.getFrame()
+            fName = f"{dirName}/{printTime}_confidence_gray.tiff"
+            if (shouldSave(loopCounter)):
+                cv2.imwrite(fName, confidenceFrame)        
 
         # Blend when both received
         if rgbFrame is not None and disparityFrame is not None:
