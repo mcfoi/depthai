@@ -118,7 +118,8 @@ right.setResolution(monoResolution)
 right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
 right.setFps(fps)
 
-stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
+stereo.setConfidenceThreshold(240)
 # LR-check is required for depth alignment
 stereo.setLeftRightCheck(True)
 # ExtendedDisparity(True) = Closer-in minimum depth, disparity range is doubled:
