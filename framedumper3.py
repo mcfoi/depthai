@@ -19,7 +19,8 @@ autoExposureSetsAfterFrameCount = 40
 exposureMicrosec = 2000
 exposureIso = 3200
 manualExposure = False
-confidenceDump = True
+confidenceDump = False
+lrDump = True
 # #################################
 
 
@@ -85,11 +86,15 @@ left = pipeline.create(dai.node.MonoCamera)
 right = pipeline.create(dai.node.MonoCamera)
 stereo = pipeline.create(dai.node.StereoDepth)
 
+leftOut = pipeline.create(dai.node.XLinkOut)
+rightOut = pipeline.create(dai.node.XLinkOut)
 rgbOut = pipeline.create(dai.node.XLinkOut)
 depthOut = pipeline.create(dai.node.XLinkOut)
 disparityOut = pipeline.create(dai.node.XLinkOut)
 confidenceMapOut = pipeline.create(dai.node.XLinkOut)
 
+leftOut.setStreamName("left")
+rightOut.setStreamName("right")
 rgbOut.setStreamName("rgb")
 depthOut.setStreamName("depth")
 disparityOut.setStreamName("disparity")
@@ -137,6 +142,8 @@ stereo.setOutputSize(1248, 936)
 
 # Linking
 camRgb.isp.link(rgbOut.input)
+left.out.link(leftOut.input)
+right.out.link(rightOut.input)
 left.out.link(stereo.left)
 right.out.link(stereo.right)
 stereo.depth.link(depthOut.input)
@@ -192,12 +199,14 @@ with device:
         printTime = int(time.time_ns() / 1_000_000) # Milliseconds
         frameTimesdelta: timedelta = None
         latestPacket = {}
+        latestPacket["left"]: dai.ImgFrame = None
+        latestPacket["right"]: dai.ImgFrame = None
         latestPacket["rgb"]: dai.ImgFrame = None
         latestPacket["depth"]: dai.ImgFrame = None
         latestPacket["disparity"]: dai.ImgFrame = None
         latestPacket["confidence"]: dai.ImgFrame = None
 
-        queueEvents = device.getQueueEvents(("rgb", "depth", "disparity", "confidence"))
+        queueEvents = device.getQueueEvents(("rgb", "depth", "disparity", "left", "right", "confidence"))
         print(f"Events # {queueEvents}")
         for queueName in queueEvents:
             packets = device.getOutputQueue(queueName).getAll()
@@ -207,7 +216,24 @@ with device:
                 # frameTimesdelta = f.getTimestamp()
                 # printTime = f"{frameTimesdelta.seconds}_{frameTimesdelta.microseconds}"
                 
+        # LEFT - TO BE TESTED
+        if lrDump and latestPacket["left"] is not None:
+            imgFrame: dai.ImgFrame = latestPacket["left"]
+            printTime = getPrintTime(imgFrame)
+            leftFrame = imgFrame.getCvFrame()
+            fName = f"{dirName}/{printTime}_left_gray.jpg"
+            if (shouldSave(loopCounter)):
+                cv2.imwrite(fName, leftFrame) 
 
+        # RIGHT - TO BE TESTED
+        if lrDump and latestPacket["right"] is not None:
+            imgFrame: dai.ImgFrame = latestPacket["right"]
+            printTime = getPrintTime(imgFrame)
+            rightFrame = imgFrame.getCvFrame()
+            fName = f"{dirName}/{printTime}_right_gray.jpg"
+            if (shouldSave(loopCounter)):
+                cv2.imwrite(fName, rightFrame) 
+        
         # COLOR
         if latestPacket["rgb"] is not None:
             imgFrame: dai.ImgFrame = latestPacket["rgb"]
